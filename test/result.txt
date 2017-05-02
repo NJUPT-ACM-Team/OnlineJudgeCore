@@ -1,0 +1,4 @@
+Result = WA
+PassNum = 0
+Time = 0
+Memory = 396
