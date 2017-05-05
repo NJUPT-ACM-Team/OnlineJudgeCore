@@ -3,6 +3,6 @@
 int main() {
     int a;
     while(scanf("%d", &a) != EOF) {
-        printf("%d %d\n", 2, a - 1);
+        printf("%d %d\n", 1, a - 1);
     }
 }

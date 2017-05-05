@@ -19,8 +19,10 @@
 #include <sys/syscall.h>
 #include <sys/resource.h>
 #include <sys/ptrace.h>
+#include <json/json.h>
 
 #include "common.h"
+#include "syscall_table.h"
 #include "logger.h"
 #include "exec.h"
 
@@ -107,7 +109,13 @@ static void parse_parameters_and_init(int argc, char *argv[]) {
     FILE_PATH::input_dir 		= FILE_PATH::runtime_dir + "/in";
     FILE_PATH::output_dir 		= FILE_PATH::runtime_dir + "/out";
     FILE_PATH::exec_output_dir 	= FILE_PATH::runtime_dir + "/exec_out";
-    FILE_PATH::result 			= FILE_PATH::runtime_dir + "/result.txt";
+    if (access(FILE_PATH::exec_output_dir.c_str(), 0) == -1) {
+        system(("mkdir " + FILE_PATH::exec_output_dir).c_str());
+    } else {
+        string rm_exec_output_files = "rm " + FILE_PATH::exec_output_dir + "/*";
+        system(rm_exec_output_files.c_str());
+    }
+    FILE_PATH::result 			= FILE_PATH::runtime_dir + "/result.json";
     FILE_PATH::compiler_stderr 	= FILE_PATH::runtime_dir + "/stderr_file_compiler.txt";
 
     LIMIT::JUDGE_TIME += PROBLEM::time_limit;
@@ -240,6 +248,19 @@ static void compile_spj_code() {
 	}
 }
 
+static bool is_valid_syscall(int syscall_id) {
+    switch (syscall_table[syscall_id]) {
+        case 0:
+            return false;
+        case -1:
+            return true;
+        default:
+            syscall_table[syscall_id] --; 
+            return true;
+    }
+    return false;
+}
+
 static void set_io_redirect() {
 	LOG_TRACE("Start to redirect the IO.");
     stdin = freopen((FILE_PATH::input_dir + "/" + FILE_PATH::cur_input).c_str(), "r", stdin);
@@ -253,6 +274,7 @@ static void set_io_redirect() {
 
 static void set_security_control() {
     struct passwd *nobody = getpwnam("nobody");
+
     if (nobody == NULL){
         LOG_WARNING("Cannot find nobody. %d: %s", errno, strerror(errno));
         exit(EXIT::SET_SECURITY);
@@ -272,11 +294,11 @@ static void set_security_control() {
 
     if (PROBLEM::lang != LANG::JAVA) {
         if (EXIT_SUCCESS != chroot(cwd)) {
-            LOG_WARNING("chroot(%s) failed. %d: %s", cwd, errno, strerror(errno));
+            LOG_WARNING("Chroot(%s) failed. %d: %s", cwd, errno, strerror(errno));
             exit(EXIT::SET_SECURITY);
         }
         if (EXIT_SUCCESS != setuid(nobody -> pw_uid)) {
-            LOG_WARNING("setuid(%d) failed. %d: %s", 
+            LOG_WARNING("Setuid(%d) failed. %d: %s", 
                 nobody -> pw_uid, errno, strerror(errno));
             exit(EXIT::SET_SECURITY);
         }
@@ -313,6 +335,11 @@ static void set_runtime_limit() {
     	LOG_WARNING("Fail to set alarm, %d: %s", errno, strerror(errno));
         exit(EXIT::SET_LIMIT);
     }
+
+    // make parent monitor son
+    if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) < 0) {
+        exit(EXIT::PRE_JUDGE_PTRACE);
+    }
 }
 
 static void execute_source_code() {
@@ -336,7 +363,10 @@ static void execute_source_code() {
     	int syscall_id = 0;
     	struct user_regs_struct regs;
 
+        init_syscall_table(PROBLEM::lang);
+
     	while (true) {
+
     		if (wait4(executor, &status, 0, &usage) < 0) {
     			LOG_WARNING("Wait4 failed.");
     			exit(EXIT::JUDGE);
@@ -350,9 +380,12 @@ static void execute_source_code() {
                 PROBLEM::time_usage = 0;
                 PROBLEM::memory_usage = PROBLEM::memory_limit;
                 PROBLEM::result = RESULT::MLE;
+                ptrace(PTRACE_KILL, executor, NULL, NULL);
+                exit(EXIT::JUDGE);
         	}
 
     		if (WIFEXITED(status)) {
+
                 if (EXIT_SUCCESS == WEXITSTATUS(status)) {
                     LOG_TRACE("OK. All is good");
                     PROBLEM::time_usage += (usage.ru_utime.tv_sec * LIMIT::TIME_UNIT +
@@ -365,16 +398,16 @@ static void execute_source_code() {
                 }
                 break;
             } else {
-            	int signo = 0;
-            	if (WIFSIGNALED(status)) {
-            		signo = WTERMSIG(status);
+                int signo = 0;
+                if (WIFSIGNALED(status)) {
+                    signo = WTERMSIG(status);
                     LOG_WARNING("Judger has killed by signal %d : %s", signo, strsignal(signo));
-            	} else if (WIFSTOPPED(status)) {
-            		signo = WSTOPSIG(status);
-            		if (SIGTRAP != signo) {
-            			LOG_WARNING("Judger has stopped by signal %d : %s", signo, strsignal(signo));
-            		}
-            	}
+                } else if (WIFSTOPPED(status)) {
+                    signo = WSTOPSIG(status);
+                    if (SIGTRAP != signo) {
+                        LOG_WARNING("Judger has stopped by signal %d : %s", signo, strsignal(signo));
+                    }
+                }
 
             	switch (signo) {
 
@@ -406,8 +439,30 @@ static void execute_source_code() {
                         break;
             	}
 
-            	ptrace(PTRACE_KILL, executor, NULL, NULL);
-                exit(EXIT::OK);
+                ptrace(PTRACE_KILL, executor, NULL, NULL);
+                break;
+            }
+
+            if (ptrace(PTRACE_GETREGS, executor, NULL, &regs) < 0) {
+                LOG_WARNING("Ptrace PTRACE_GETREGS failed %d: %s ", errno, strerror(errno));
+                exit(EXIT::JUDGE);
+            }
+            
+#ifdef __i386
+            syscall_id = regs.orig_eax;
+#else
+            syscall_id = regs.orig_rax;
+#endif
+            if (syscall_id > 0 && !is_valid_syscall(syscall_id)) {
+                LOG_WARNING("Restricted system call %d\n", syscall_id);
+                PROBLEM::result = RESULT::RE;
+                ptrace(PTRACE_KILL, executor, NULL, NULL);
+                exit(EXIT::JUDGE);
+            }
+
+            if (ptrace(PTRACE_SYSCALL, executor, NULL, NULL) < 0) {
+                LOG_WARNING("Ptrace PTRACE_SYSCALL failed.");
+                exit(EXIT::JUDGE);
             }
     	}
     }
@@ -486,7 +541,6 @@ static void judge_output_result_spj() {
 }
 
 static void export_result() {
-	FILE* result_file = fopen(FILE_PATH::result.c_str(), "w");
 	string result = "";
     switch (PROBLEM::result) {
         case RESULT::CE : result = "CE";	break;
@@ -500,7 +554,7 @@ static void export_result() {
         default: result = "SE"; 			break;
     }
     string extraMessage = PROBLEM::extra_message;
-    fprintf(result_file, "Result = %s\n", result.c_str());
+    // fprintf(result_file, "Result = %s\n", result.c_str());
     int time_usage = 0;
     int memory_usage = 0;
     if (result == "AC" || result == "PE" || result == "WA") {
@@ -510,18 +564,29 @@ static void export_result() {
     	time_usage = PROBLEM::time_usage;
     	memory_usage = PROBLEM::memory_usage;
     }
-    fprintf(result_file, "PassNum = %d\n", PROBLEM::pass_case_num);
-    fprintf(result_file, "Time = %d\n", time_usage);
-    fprintf(result_file, "Memory = %d\n", memory_usage);
-    if (extraMessage.length() != 0) {
-        fprintf(result_file, "CE = %s\n", extraMessage.c_str());
-    }
 
     LOG_TRACE("The final result is %s %d %d %s",
             result.c_str(), time_usage,
             memory_usage, PROBLEM::extra_message.c_str());
-    //string rm_exec_output_files = "rm " + FILE_PATH::exec_output_dir + "/*";
-    //system(rm_exec_output_files.c_str());
+
+    Json::Value root;
+    root["Result"] = result;
+    root["PassNum"] = PROBLEM::pass_case_num;
+    root["Time"] = time_usage;
+    root["Memory"] = memory_usage;
+    if (extraMessage.length() != 0) {
+        root["CE"] = extraMessage.c_str();
+    }
+    Json::StyledWriter sw;
+    ofstream out_json(FILE_PATH::result.c_str(), ios::out | ios::trunc);
+    out_json << sw.write(root);
+    out_json.close();
+    // fprintf(result_file, "PassNum = %d\n", PROBLEM::pass_case_num);
+    // fprintf(result_file, "Time = %d\n", time_usage);
+    // fprintf(result_file, "Memory = %d\n", memory_usage);
+    // if (extraMessage.length() != 0) {
+    //     fprintf(result_file, "CE = %s\n", extraMessage.c_str());
+    // }
 }
 
 static vector<string> get_files(string cur_dir) {
@@ -603,6 +668,7 @@ int main(int argc, char *argv[]) {
 			tmp << FILE_PATH::input_dir + "/" + FILE_PATH::cur_input << endl;
 			tmp << FILE_PATH::output_dir + "/" + FILE_PATH::cur_output << endl;
 			tmp << FILE_PATH::exec_output_dir + "/" + FILE_PATH::cur_exec_output << endl;
+            tmp.close();
 		}
 		if (PROBLEM::is_spj) {
 			judge_output_result_spj();
