@@ -397,16 +397,19 @@ static void execute_source_code() {
                     PROBLEM::result = RESULT::RE;
                 }
                 break;
-            } else {
+            } 
+
+            // filter signal SIGTRAP to avoid runtime error
+            // cased by "5: Trace/breakpoint trap"
+            if (WIFSIGNALED(status) || 
+                (WIFSTOPPED(status) && WSTOPSIG(status) != SIGTRAP)) {
                 int signo = 0;
                 if (WIFSIGNALED(status)) {
                     signo = WTERMSIG(status);
                     LOG_WARNING("Judger has killed by signal %d : %s", signo, strsignal(signo));
                 } else if (WIFSTOPPED(status)) {
                     signo = WSTOPSIG(status);
-                    if (SIGTRAP != signo) {
-                        LOG_WARNING("Judger has stopped by signal %d : %s", signo, strsignal(signo));
-                    }
+                    LOG_WARNING("Judger has stopped by signal %d : %s", signo, strsignal(signo));
                 }
 
             	switch (signo) {
@@ -432,7 +435,7 @@ static void execute_source_code() {
                         break;
 
                     default: 
-                    	LOG_TRACE("Runtime Error");
+                    	LOG_TRACE("Runtime Error %d : %s", signo, strsignal(signo));
                         PROBLEM::time_usage = 0;
                         PROBLEM::memory_usage = 0;
                         PROBLEM::result = RESULT::RE;
