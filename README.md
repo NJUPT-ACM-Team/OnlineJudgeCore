@@ -1,4 +1,4 @@
-### NJUPT OnlineJudgeCore 
+#### NJUPT OnlineJudgeCore 
 
 ##环境
 
@@ -10,17 +10,27 @@ Linux操作系统
 
 ```
 sudo apt-get install scons
+```
+
 下载jsoncpp-src-0.5.0.tar.gz(http://sourceforge.net/projects/jsoncpp/files/)
+
+```
 tar -xvzf jsoncpp-src-0.5.0.tar.gz
 cd jsoncpp-src-0.5.0
 scons platform=linux-gcc
+```
+
 进入jsoncpp-src-0.5.0/libs/Linux-gcc-5.4.0
+
+```
 mv libjson_linux-gcc-4.9.1_libmt.a libjson.a
 sudo cp -rf jsoncpp-src-0.5.0/include/json /usr/include/
 sudo cp -rf jsoncpp-src-0.5.0/libs/Linux-gcc-5.4.0/libjson /usr/local/lib/
-
+```
 
 然后执行make即可生成可运行文件judge
+
+```
 sudo make
 ```
 
