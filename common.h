@@ -92,7 +92,6 @@ namespace EXIT {
 	const int SET_LIMIT        = 15;  	//设置时间限制错误退出
 	const int SET_SECURITY     = 17;  	//设置安全限制错误退出
 	const int JUDGE            = 21;  	//程序调用错误退出
-	const int COMPARE          = 27;
 	const int COMPILE_TIMEOUT  = 36;  	//超时退出
 	const int UNKNOWN          = 127; 	//不详
 
