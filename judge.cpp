@@ -443,7 +443,7 @@ static void execute_source_code() {
             	}
 
                 ptrace(PTRACE_KILL, executor, NULL, NULL);
-                break;
+                exit(EXIT::OK);
             }
 
             if (ptrace(PTRACE_GETREGS, executor, NULL, &regs) < 0) {
